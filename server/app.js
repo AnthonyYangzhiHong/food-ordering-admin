@@ -4,6 +4,8 @@ const mongoose = require('mongoose');
 var crypto = require('crypto');
 const UserSchema = require('./models/User');
 const session = require('express-session');
+var passport = require('passport');
+var LocalStrategy = require('passport-local').Strategy;
 const MongoStore = require('connect-mongo')(session);
 
 const app = express();
@@ -34,6 +36,40 @@ app.use(session({
     }
 }));
 
+passport.use(new LocalStrategy(
+    function(username, password, cb) {
+        User.findOne({ username: username })
+            .then((user) => {
+                if (!user) { return cb(null, false) }
+                
+                // Function defined at bottom of app.js
+                const isValid = validPassword(password, user.hash, user.salt);
+                
+                if (isValid) {
+                    return cb(null, user);
+                } else {
+                    return cb(null, false);
+                }
+            })
+            .catch((err) => {   
+                cb(err);
+            });
+}));
+
+passport.serializeUser(function(user, cb) {
+    cb(null, user.id);
+});
+
+passport.deserializeUser(function(id, cb) {
+    User.findById(id, function (err, user) {
+        if (err) { return cb(err); }
+        cb(null, user);
+    });
+});
+
+app.use(passport.initialize());
+app.use(passport.session());
+
 
 //Routs
 app.get('/login', (req, res, next) => {
@@ -43,6 +79,10 @@ app.get('/login', (req, res, next) => {
     <br>Enter Password:<br><input type="password" name="password">\
     <br><br><input type="submit" value="Submit"></form>';
     res.send(form);
+});
+
+app.post('/login', passport.authenticate('local', { failureRedirect: '/login-failure', successRedirect: 'login-success' }), (err, req, res, next) => {
+    if (err) next(err);
 });
 
 app.get('/register', (req, res, next) => {
@@ -72,11 +112,34 @@ app.post('/register', (req, res, next) => {
     res.redirect('/login');
 });
 
+app.get('/login-success', checkAuthenticated, (req, res, next) => {
+    console.log(req.session);
+    const form = '<h1>click button to logout</h1><form method="get" action="logout"><input type="submit" value="Logout"></input></form>'
+    res.send(form);
+});
+
+app.get('/login-failure', (req, res, next) => {
+    res.send('You entered the wrong password.');
+});
+
+app.get('/logout', (req, res) => {
+    req.logout();
+    res.redirect('/login')
+})
+
 app.get('/api/greeting', (req, res) => {
   const name = req.query.name || 'World';
 
   res.json({ greeting: `Hello ${name}!` })
 });
+
+function checkAuthenticated(req, res, next) {
+    if(req.isAuthenticated()){
+        next()
+    } else {
+        res.redirect('/login')
+    }
+}
 
 app.listen(3001, () =>
   console.log('Express server is running on localhost:3001')
@@ -92,4 +155,9 @@ function genPassword(password) {
       salt: salt,
       hash: genHash
     };
+}
+
+function validPassword(password, hash, salt) {
+    var hashVerify = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+    return hash === hashVerify;
 }
